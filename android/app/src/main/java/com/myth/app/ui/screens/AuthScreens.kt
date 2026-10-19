@@ -144,7 +144,7 @@ fun RegisterScreen(
                             chatManager.onUserAuthenticated(auth)
                             onNavigateToMain()
                         }.onFailure { err ->
-                            errorMessage = err.message ?: "Registration failed"
+                            errorMessage = err.localizedMessage ?: err.message ?: "Registration failed"
                         }
                     }
                 },
@@ -272,7 +272,7 @@ fun LoginScreen(
                             chatManager.onUserAuthenticated(auth)
                             onNavigateToMain()
                         }.onFailure { err ->
-                            errorMessage = err.message ?: "Login failed"
+                            errorMessage = err.localizedMessage ?: err.message ?: "Login failed"
                         }
                     }
                 },

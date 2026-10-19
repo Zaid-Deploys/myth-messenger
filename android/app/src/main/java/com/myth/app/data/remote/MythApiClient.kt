@@ -1,6 +1,10 @@
 package com.myth.app.data.remote
 
+import android.util.Log
+import com.myth.app.data.local.ServerConfigStore
 import com.myth.model.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -8,14 +12,21 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class MythApiClient(
-    var baseUrl: String = "http://10.0.2.2:8080",
-    private val client: OkHttpClient = OkHttpClient()
+    var baseUrl: String = ServerConfigStore.PRODUCTION_SERVER_URL,
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
 ) {
     fun updateBaseUrl(newBaseUrl: String) {
         baseUrl = newBaseUrl.trimEnd('/')
     }
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -51,23 +62,16 @@ class MythApiClient(
             .post("{}".toRequestBody(jsonMediaType))
             .build()
 
-        return try {
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) Result.success(Unit)
-                else Result.failure(IOException("Logout failed: ${response.code}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        return executeEmptyRequest(request, "Logout failed")
     }
 
-    suspend fun checkUsername(username: String): Result<Boolean> {
+    suspend fun checkUsername(username: String): Result<Boolean> = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("$baseUrl/api/v1/auth/check-username?username=$username")
             .get()
             .build()
 
-        return try {
+        try {
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val resp = json.decodeFromString<UsernameCheckResponse>(response.body?.string().orEmpty())
@@ -77,7 +81,8 @@ class MythApiClient(
                 }
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e("MythApiClient", "checkUsername failed", e)
+            Result.failure(formatException(e))
         }
     }
 
@@ -120,14 +125,7 @@ class MythApiClient(
             .post(body)
             .build()
 
-        return try {
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) Result.success(Unit)
-                else Result.failure(IOException("Failed to respond to contact request: ${response.code}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        return executeEmptyRequest(request, "Failed to respond to contact request")
     }
 
     suspend fun blockUser(token: String, targetUsername: String): Result<Unit> {
@@ -138,14 +136,7 @@ class MythApiClient(
             .post(body)
             .build()
 
-        return try {
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) Result.success(Unit)
-                else Result.failure(IOException("Failed to block user: ${response.code}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        return executeEmptyRequest(request, "Failed to block user")
     }
 
     suspend fun unblockUser(token: String, targetUsername: String): Result<Unit> {
@@ -156,14 +147,7 @@ class MythApiClient(
             .post(body)
             .build()
 
-        return try {
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) Result.success(Unit)
-                else Result.failure(IOException("Failed to unblock user: ${response.code}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        return executeEmptyRequest(request, "Failed to unblock user")
     }
 
     suspend fun registerPreKeys(token: String, req: RegisterPreKeysRequest): Result<Unit> {
@@ -174,14 +158,7 @@ class MythApiClient(
             .post(body)
             .build()
 
-        return try {
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) Result.success(Unit)
-                else Result.failure(IOException("Failed to register prekeys: ${response.code}"))
-            }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        return executeEmptyRequest(request, "Failed to register prekeys")
     }
 
     suspend fun getPreKeyBundle(token: String, username: String): Result<PreKeyBundleDto> {
@@ -194,8 +171,30 @@ class MythApiClient(
         return executeRequest(request)
     }
 
-    private inline fun <reified T> executeRequest(request: Request): Result<T> {
-        return try {
+    suspend fun executeEmptyRequest(request: Request, defaultErrMsg: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success(Unit)
+                } else {
+                    val bodyStr = response.body?.string().orEmpty()
+                    val err = try {
+                        json.decodeFromString<ErrorResponse>(bodyStr).message
+                    } catch (e: Exception) {
+                        "$defaultErrMsg (HTTP ${response.code})"
+                    }
+                    Log.w("MythApiClient", "Request to ${request.url} failed: $err")
+                    Result.failure(IOException(err))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MythApiClient", "Request to ${request.url} threw exception", e)
+            Result.failure(formatException(e))
+        }
+    }
+
+    private suspend inline fun <reified T> executeRequest(request: Request): Result<T> = withContext(Dispatchers.IO) {
+        try {
             client.newCall(request).execute().use { response ->
                 val bodyStr = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
@@ -205,13 +204,25 @@ class MythApiClient(
                     val err = try {
                         json.decodeFromString<ErrorResponse>(bodyStr).message
                     } catch (e: Exception) {
-                        "HTTP error ${response.code}"
+                        "Server error (HTTP ${response.code})"
                     }
+                    Log.w("MythApiClient", "Request to ${request.url} failed: $err")
                     Result.failure(IOException(err))
                 }
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e("MythApiClient", "Request to ${request.url} failed", e)
+            Result.failure(formatException(e))
         }
+    }
+
+    fun formatException(e: Exception): IOException {
+        val msg = when (e) {
+            is java.net.UnknownHostException -> "Unable to reach server. Check internet connection."
+            is java.net.ConnectException -> "Connection refused. Please try again."
+            is java.net.SocketTimeoutException -> "Connection timed out. Server may be waking up, please retry."
+            else -> e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+        }
+        return IOException(msg, e)
     }
 }

@@ -11,8 +11,8 @@ class ServerConfigStore(context: Context) {
 
     fun getServerUrl(): String {
         val saved = prefs.getString(KEY_SERVER_URL, null)
-        if (saved == null || (saved.contains("10.0.2.2") && !isEmulator())) {
-            return defaultUrl()
+        if (saved.isNullOrBlank() || saved.contains("10.0.2.2") || saved.contains("localhost") || saved.contains("192.168.")) {
+            return PRODUCTION_SERVER_URL
         }
         return saved
     }
@@ -44,22 +44,7 @@ class ServerConfigStore(context: Context) {
 
         // Live Render Cloud Backend URL - accessible anywhere in the world
         const val PRODUCTION_SERVER_URL = "https://myth-messenger.onrender.com"
-        const val EMULATOR_SERVER_URL = "http://10.0.2.2:8080"
 
-        fun isEmulator(): Boolean {
-            return (Build.FINGERPRINT.startsWith("generic")
-                    || Build.FINGERPRINT.startsWith("unknown")
-                    || Build.MODEL.contains("google_sdk")
-                    || Build.MODEL.contains("Emulator")
-                    || Build.MODEL.contains("Android SDK built for x86")
-                    || Build.MANUFACTURER.contains("Genymotion")
-                    || Build.HARDWARE.contains("goldfish")
-                    || Build.HARDWARE.contains("ranchu")
-                    || Build.PRODUCT.contains("sdk_gphone"))
-        }
-
-        fun defaultUrl(): String {
-            return if (isEmulator()) EMULATOR_SERVER_URL else PRODUCTION_SERVER_URL
-        }
+        fun defaultUrl(): String = PRODUCTION_SERVER_URL
     }
 }

@@ -28,7 +28,7 @@ enum class ConnectionStatus {
 }
 
 class MythWebSocketClient(
-    var wsUrl: String = "ws://10.0.2.2:8080/ws/v1/messaging",
+    var wsUrl: String = "wss://myth-messenger.onrender.com/ws/v1/messaging",
     private val scope: CoroutineScope
 ) {
     fun updateWsUrl(newWsUrl: String) {
