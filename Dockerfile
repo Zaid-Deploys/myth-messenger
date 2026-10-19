@@ -8,7 +8,7 @@ COPY core-model ./core-model
 COPY core-crypto ./core-crypto
 COPY server ./server
 
-RUN chmod +x gradlew && ./gradlew :server:installDist --no-daemon
+RUN chmod +x gradlew && ./gradlew :server:installDist --no-daemon -Dorg.gradle.jvmargs="-Xmx512m"
 
 # Runtime Stage
 FROM eclipse-temurin:21-jre
@@ -16,7 +16,7 @@ FROM eclipse-temurin:21-jre
 WORKDIR /app
 
 # Run as non-privileged user for security
-RUN useradd -m -u 1000 mythuser
+RUN useradd -m mythuser
 
 COPY --from=builder /app/server/build/install/server /app
 
