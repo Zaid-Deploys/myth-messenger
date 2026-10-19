@@ -18,7 +18,8 @@ WORKDIR /app
 # Run as non-privileged user for security
 RUN useradd -m mythuser
 
-COPY --from=builder /app/server/build/install/server /app
+COPY --chown=mythuser:mythuser --from=builder /app/server/build/install/server /app
+RUN chown -R mythuser:mythuser /app
 
 USER mythuser
 
