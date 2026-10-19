@@ -16,6 +16,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class ChatManager(
+    private val context: android.content.Context? = null,
     private val apiClient: MythApiClient,
     private val wsClient: MythWebSocketClient,
     val chatStore: VolatileChatStore,
@@ -50,8 +51,43 @@ class ChatManager(
         }
     }
 
+    private fun loadOrInitKeys(ctx: android.content.Context, username: String) {
+        val prefs = ctx.getSharedPreferences("myth_keys_$username", android.content.Context.MODE_PRIVATE)
+        val edPriv = prefs.getString("ed_priv", null)
+        val edPub = prefs.getString("ed_pub", null)
+        val dhPriv = prefs.getString("dh_priv", null)
+        val dhPub = prefs.getString("dh_pub", null)
+        val spkPriv = prefs.getString("spk_priv", null)
+        val spkPub = prefs.getString("spk_pub", null)
+
+        if (edPriv != null && edPub != null && dhPriv != null && dhPub != null && spkPriv != null && spkPub != null) {
+            try {
+                identityEdKey = Ed25519Key.fromPrivateKeyBytes(CryptoUtils.fromBase64(edPriv), CryptoUtils.fromBase64(edPub))
+                identityDhKey = X25519Key.fromPrivateKeyBytes(CryptoUtils.fromBase64(dhPriv), CryptoUtils.fromBase64(dhPub))
+                signedPreKey = X25519Key.fromPrivateKeyBytes(CryptoUtils.fromBase64(spkPriv), CryptoUtils.fromBase64(spkPub))
+                return
+            } catch (e: Exception) {
+                android.util.Log.e("ChatManager", "Failed to restore keys from prefs, regenerating", e)
+            }
+        }
+
+        identityEdKey = Ed25519Key.generate()
+        identityDhKey = X25519Key.generate()
+        signedPreKey = X25519Key.generate()
+
+        prefs.edit()
+            .putString("ed_priv", CryptoUtils.toBase64(identityEdKey.privateKey!!.encoded))
+            .putString("ed_pub", CryptoUtils.toBase64(identityEdKey.publicKeyBytes))
+            .putString("dh_priv", CryptoUtils.toBase64(identityDhKey.privateKey!!.encoded))
+            .putString("dh_pub", CryptoUtils.toBase64(identityDhKey.publicKeyBytes))
+            .putString("spk_priv", CryptoUtils.toBase64(signedPreKey.privateKey!!.encoded))
+            .putString("spk_pub", CryptoUtils.toBase64(signedPreKey.publicKeyBytes))
+            .apply()
+    }
+
     fun onUserAuthenticated(auth: AuthResponse) {
         currentUser = auth
+        context?.let { loadOrInitKeys(it, auth.username) }
         callManager?.currentUser = auth.username
         wsClient.connect(auth.token)
         publishPreKeys(auth.token)
@@ -156,15 +192,22 @@ class ChatManager(
         val bundleResult = apiClient.getPreKeyBundle(user.token, targetUsername)
         val bundle = bundleResult.getOrNull() ?: return null
 
-        val initiatorResult = X3DH.initiate(identityDhKey, bundle)
-        val remoteIdentityDhPub = X25519Key.fromPublicKeyBase64(bundle.signedPreKeyBase64)
+        val bobSignedPreKeyPub = X25519Key.fromPublicKeyBase64(bundle.signedPreKeyBase64)
+        val sharedDh = signedPreKey.calculateAgreement(bobSignedPreKeyPub)
+        val masterSecret = Kdf.deriveKey(
+            ikm = sharedDh,
+            salt = null,
+            info = "Myth-SharedSecret-v1".toByteArray(Charsets.UTF_8),
+            outputLength = 32
+        )
 
+        val canonicalConvId = listOf(user.username.lowercase().trim(), targetUsername.lowercase().trim()).sorted().joinToString(":")
         val newSession = DoubleRatchetSession.createAsInitiator(
-            conversationId = targetUsername,
+            conversationId = canonicalConvId,
             localUsername = user.username,
             remoteUsername = targetUsername,
-            masterSharedSecret = initiatorResult.sharedMasterKey,
-            remoteIdentityDhPublicKey = remoteIdentityDhPub
+            masterSharedSecret = masterSecret,
+            remoteIdentityDhPublicKey = bobSignedPreKeyPub
         )
         sessions[targetUsername] = newSession
         return newSession
@@ -174,44 +217,67 @@ class ChatManager(
         when (frame) {
             is MythWebSocketFrame.RelayedMessage -> {
                 val sender = frame.senderUsername.lowercase().trim()
-                var session = sessions[sender]
-                if (session == null) {
-                    // Initialize receiving session
-                    val dummySecret = CryptoUtils.randomBytes(32)
-                    session = DoubleRatchetSession.createAsRecipient(
-                        conversationId = sender,
-                        localUsername = currentUser?.username ?: "",
-                        remoteUsername = sender,
-                        masterSharedSecret = dummySecret,
-                        localKey = signedPreKey
-                    )
-                    sessions[sender] = session
-                }
+                scope.launch(Dispatchers.IO) {
+                    var session = sessions[sender]
+                    if (session == null) {
+                        val user = currentUser
+                        if (user != null) {
+                            val bundleResult = apiClient.getPreKeyBundle(user.token, sender)
+                            val bundle = bundleResult.getOrNull()
+                            if (bundle != null) {
+                                val senderSignedPreKeyPub = X25519Key.fromPublicKeyBase64(bundle.signedPreKeyBase64)
+                                val sharedDh = signedPreKey.calculateAgreement(senderSignedPreKeyPub)
+                                val masterSecret = Kdf.deriveKey(
+                                    ikm = sharedDh,
+                                    salt = null,
+                                    info = "Myth-SharedSecret-v1".toByteArray(Charsets.UTF_8),
+                                    outputLength = 32
+                                )
+                                val canonicalConvId = listOf(user.username.lowercase().trim(), sender.lowercase().trim()).sorted().joinToString(":")
+                                session = DoubleRatchetSession.createAsRecipient(
+                                    conversationId = canonicalConvId,
+                                    localUsername = user.username,
+                                    remoteUsername = sender,
+                                    masterSharedSecret = masterSecret,
+                                    localKey = signedPreKey
+                                )
+                                sessions[sender] = session
+                            }
+                        }
+                    }
 
-                try {
-                    val decryptedBytes = session.decrypt(
-                        ephemeralDhPublicKeyBase64 = frame.ephemeralDhPublicKeyBase64,
-                        sequenceNumber = frame.sequenceNumber,
-                        prevChainLen = frame.previousChainLength,
-                        ciphertext = CryptoUtils.fromBase64(frame.ciphertextBase64),
-                        iv = CryptoUtils.fromBase64(frame.ivBase64),
-                        authTag = CryptoUtils.fromBase64(frame.authTagBase64)
-                    )
-                    val text = String(decryptedBytes, Charsets.UTF_8)
-                    chatStore.addMessage(
-                        ChatMessage(
-                            id = frame.messageId,
-                            conversationId = sender,
-                            senderUsername = sender,
-                            recipientUsername = currentUser?.username ?: "",
-                            text = text,
-                            timestamp = frame.timestamp,
-                            isOutgoing = false,
-                            deliveryStatus = DeliveryStatus.DELIVERED
+                    if (session == null) {
+                        android.util.Log.e("ChatManager", "Could not establish recipient session for $sender")
+                        _securityAlerts.emit("Could not establish secure session with $sender")
+                        return@launch
+                    }
+
+                    try {
+                        val decryptedBytes = session.decrypt(
+                            ephemeralDhPublicKeyBase64 = frame.ephemeralDhPublicKeyBase64,
+                            sequenceNumber = frame.sequenceNumber,
+                            prevChainLen = frame.previousChainLength,
+                            ciphertext = CryptoUtils.fromBase64(frame.ciphertextBase64),
+                            iv = CryptoUtils.fromBase64(frame.ivBase64),
+                            authTag = CryptoUtils.fromBase64(frame.authTagBase64)
                         )
-                    )
-                } catch (e: Exception) {
-                    scope.launch {
+                        val text = String(decryptedBytes, Charsets.UTF_8)
+                        chatStore.addMessage(
+                            ChatMessage(
+                                id = frame.messageId,
+                                conversationId = sender,
+                                senderUsername = sender,
+                                recipientUsername = currentUser?.username ?: "",
+                                text = text,
+                                timestamp = frame.timestamp,
+                                isOutgoing = false,
+                                deliveryStatus = DeliveryStatus.DELIVERED
+                            )
+                        )
+                        markMessageAsRead(frame.messageId, sender)
+                    } catch (e: Exception) {
+                        android.util.Log.e("ChatManager", "Decryption failed for message from $sender", e)
+                        sessions.remove(sender)
                         _securityAlerts.emit("Decryption failed for message from $sender: message may have been tampered with.")
                     }
                 }

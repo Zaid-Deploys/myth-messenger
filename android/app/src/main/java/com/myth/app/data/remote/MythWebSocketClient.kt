@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -46,6 +47,9 @@ class MythWebSocketClient(
         .build()
 
     private var webSocket: WebSocket? = null
+    private var currentSessionToken: String? = null
+    private var reconnectJob: kotlinx.coroutines.Job? = null
+    private var heartbeatJob: kotlinx.coroutines.Job? = null
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.DISCONNECTED)
     val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
@@ -54,6 +58,7 @@ class MythWebSocketClient(
     val incomingFrames: SharedFlow<MythWebSocketFrame> = _incomingFrames.asSharedFlow()
 
     fun connect(sessionToken: String) {
+        currentSessionToken = sessionToken
         if (_connectionStatus.value == ConnectionStatus.CONNECTED || _connectionStatus.value == ConnectionStatus.AUTHENTICATED) {
             return
         }
@@ -63,10 +68,14 @@ class MythWebSocketClient(
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
+                webSocket = ws
                 _connectionStatus.value = ConnectionStatus.CONNECTED
-                // Immediately authenticate with session token
+                android.util.Log.d("MythWebSocketClient", "WebSocket connected to $wsUrl, sending Auth...")
+                // Immediately authenticate with session token directly on the newly opened socket
                 val authFrame = MythWebSocketFrame.Auth(sessionToken)
-                sendFrame(authFrame)
+                val text = json.encodeToString<MythWebSocketFrame>(authFrame)
+                ws.send(text)
+                startHeartbeat()
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
@@ -74,23 +83,59 @@ class MythWebSocketClient(
                     val frame = json.decodeFromString<MythWebSocketFrame>(text)
                     if (frame is MythWebSocketFrame.AuthSuccess) {
                         _connectionStatus.value = ConnectionStatus.AUTHENTICATED
+                        android.util.Log.d("MythWebSocketClient", "Authenticated as ${frame.username}")
                     }
                     scope.launch(Dispatchers.Default) {
                         _incomingFrames.emit(frame)
                     }
                 } catch (e: Exception) {
-                    // Ignore malformed frame
+                    android.util.Log.e("MythWebSocketClient", "Failed to decode WebSocket frame: $text", e)
                 }
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                android.util.Log.w("MythWebSocketClient", "WebSocket closed ($code): $reason")
                 _connectionStatus.value = ConnectionStatus.DISCONNECTED
+                stopHeartbeat()
+                scheduleReconnect()
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                android.util.Log.e("MythWebSocketClient", "WebSocket error: ${t.message}", t)
                 _connectionStatus.value = ConnectionStatus.ERROR
+                stopHeartbeat()
+                scheduleReconnect()
             }
         })
+    }
+
+    private fun scheduleReconnect() {
+        val token = currentSessionToken ?: return
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(3000)
+            if (_connectionStatus.value != ConnectionStatus.AUTHENTICATED && _connectionStatus.value != ConnectionStatus.CONNECTING) {
+                android.util.Log.d("MythWebSocketClient", "Attempting automatic reconnection to $wsUrl...")
+                connect(token)
+            }
+        }
+    }
+
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                kotlinx.coroutines.delay(20000) // Keep-alive ping every 20 seconds to prevent cloud proxy timeout
+                if (_connectionStatus.value == ConnectionStatus.AUTHENTICATED) {
+                    sendFrame(MythWebSocketFrame.Heartbeat(System.currentTimeMillis()))
+                }
+            }
+        }
+    }
+
+    private fun stopHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
     }
 
     fun sendFrame(frame: MythWebSocketFrame): Boolean {
@@ -100,6 +145,9 @@ class MythWebSocketClient(
     }
 
     fun disconnect() {
+        currentSessionToken = null
+        reconnectJob?.cancel()
+        stopHeartbeat()
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         _connectionStatus.value = ConnectionStatus.DISCONNECTED

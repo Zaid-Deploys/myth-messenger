@@ -63,6 +63,7 @@ class MythApplication : Application() {
 
         // 5. Initialize Chat and Cryptography coordinator
         chatManager = ChatManager(
+            context = this,
             apiClient = apiClient,
             wsClient = wsClient,
             chatStore = chatStore,

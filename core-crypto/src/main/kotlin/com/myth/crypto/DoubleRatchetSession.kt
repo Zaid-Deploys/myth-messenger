@@ -184,11 +184,15 @@ class DoubleRatchetSession(
         }
     }
 
+    val canonicalConversationId: String =
+        listOf(localUsername.lowercase().trim(), remoteUsername.lowercase().trim()).sorted().joinToString(":")
+
     private fun buildAad(convId: String, sender: String, seq: Long, prevLen: Long): ByteArray {
         val baos = ByteArrayOutputStream()
         baos.write("Myth-AAD-v1".toByteArray(Charsets.UTF_8))
-        baos.write(convId.toByteArray(Charsets.UTF_8))
-        baos.write(sender.toByteArray(Charsets.UTF_8))
+        val effectiveConvId = if (convId.contains(":") || convId.startsWith("conv-")) convId else canonicalConversationId
+        baos.write(effectiveConvId.toByteArray(Charsets.UTF_8))
+        baos.write(sender.lowercase().trim().toByteArray(Charsets.UTF_8))
         val buf = ByteBuffer.allocate(16)
         buf.putLong(seq)
         buf.putLong(prevLen)
