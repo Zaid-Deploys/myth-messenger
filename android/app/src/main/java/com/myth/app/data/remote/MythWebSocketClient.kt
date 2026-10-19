@@ -28,9 +28,12 @@ enum class ConnectionStatus {
 }
 
 class MythWebSocketClient(
-    private val wsUrl: String = "ws://10.0.2.2:8080/ws/v1/messaging",
+    var wsUrl: String = "ws://10.0.2.2:8080/ws/v1/messaging",
     private val scope: CoroutineScope
 ) {
+    fun updateWsUrl(newWsUrl: String) {
+        wsUrl = newWsUrl
+    }
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true

@@ -10,9 +10,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 class MythApiClient(
-    private val baseUrl: String = "http://10.0.2.2:8080",
+    var baseUrl: String = "http://10.0.2.2:8080",
     private val client: OkHttpClient = OkHttpClient()
 ) {
+    fun updateBaseUrl(newBaseUrl: String) {
+        baseUrl = newBaseUrl.trimEnd('/')
+    }
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true

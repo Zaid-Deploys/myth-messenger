@@ -1,6 +1,7 @@
 package com.myth.app
 
 import android.app.Application
+import com.myth.app.data.local.ServerConfigStore
 import com.myth.app.data.local.VolatileChatStore
 import com.myth.app.data.remote.MythApiClient
 import com.myth.app.data.remote.MythWebSocketClient
@@ -16,6 +17,8 @@ class MythApplication : Application() {
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    lateinit var serverConfigStore: ServerConfigStore
+        private set
     lateinit var apiClient: MythApiClient
         private set
     lateinit var wsClient: MythWebSocketClient
@@ -39,10 +42,18 @@ class MythApplication : Application() {
         // 2. Initialize hardware-backed Keystore
         keystoreManager = AndroidKeystoreManager()
 
-        // 3. Initialize networking & memory-only volatile store
-        apiClient = MythApiClient()
-        wsClient = MythWebSocketClient(scope = applicationScope)
+        // 3. Initialize Server Configuration Store
+        serverConfigStore = ServerConfigStore(this)
+
+        // 4. Initialize networking & memory-only volatile store
+        apiClient = MythApiClient(baseUrl = serverConfigStore.getServerUrl())
+        wsClient = MythWebSocketClient(wsUrl = serverConfigStore.getWsUrl(), scope = applicationScope)
         chatStore = VolatileChatStore(scope = applicationScope)
+
+        serverConfigStore.onUrlChanged = { newBaseUrl, newWsUrl ->
+            apiClient.updateBaseUrl(newBaseUrl)
+            wsClient.updateWsUrl(newWsUrl)
+        }
 
         // 4. Initialize Voice Call Manager
         callManager = com.myth.app.domain.CallManager(
