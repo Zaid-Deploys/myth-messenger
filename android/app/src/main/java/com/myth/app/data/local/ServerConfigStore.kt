@@ -10,7 +10,11 @@ class ServerConfigStore(context: Context) {
     var onUrlChanged: ((baseUrl: String, wsUrl: String) -> Unit)? = null
 
     fun getServerUrl(): String {
-        return prefs.getString(KEY_SERVER_URL, defaultUrl()) ?: defaultUrl()
+        val saved = prefs.getString(KEY_SERVER_URL, null)
+        if (saved == null || (saved.contains("10.0.2.2") && !isEmulator())) {
+            return defaultUrl()
+        }
+        return saved
     }
 
     fun getWsUrl(): String {
@@ -20,7 +24,7 @@ class ServerConfigStore(context: Context) {
     fun setServerUrl(inputUrl: String) {
         var normalized = inputUrl.trim().trimEnd('/')
         if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
-            normalized = "http://$normalized"
+            normalized = "https://$normalized"
         }
         prefs.edit().putString(KEY_SERVER_URL, normalized).apply()
         onUrlChanged?.invoke(normalized, toWsUrl(normalized))
@@ -38,8 +42,8 @@ class ServerConfigStore(context: Context) {
     companion object {
         private const val KEY_SERVER_URL = "server_url"
 
-        // Public cloud backend URL for physical devices everywhere
-        const val PRODUCTION_SERVER_URL = "https://myth-server.onrender.com"
+        // Live Render Cloud Backend URL - accessible anywhere in the world
+        const val PRODUCTION_SERVER_URL = "https://myth-messenger.onrender.com"
         const val EMULATOR_SERVER_URL = "http://10.0.2.2:8080"
 
         fun isEmulator(): Boolean {
