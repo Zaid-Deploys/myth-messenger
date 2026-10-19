@@ -1,5 +1,4 @@
-# Build Stage
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM eclipse-temurin:21-jdk AS builder
 
 WORKDIR /app
 COPY gradlew gradlew.bat settings.gradle.kts build.gradle.kts gradle.properties ./
@@ -11,12 +10,12 @@ COPY server ./server
 RUN chmod +x gradlew && ./gradlew :server:installDist --no-daemon
 
 # Runtime Stage
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
 # Run as non-privileged user for security
-RUN addgroup -S mythgroup && adduser -S mythuser -G mythgroup
+RUN useradd -m -u 1000 mythuser
 
 COPY --from=builder /app/server/build/install/server /app
 

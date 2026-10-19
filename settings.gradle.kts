@@ -19,4 +19,6 @@ rootProject.name = "Myth"
 include(":core-model")
 include(":core-crypto")
 include(":server")
-include(":android:app")
+if (file("android/app").exists()) {
+    include(":android:app")
+}
