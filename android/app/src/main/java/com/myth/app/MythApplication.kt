@@ -57,6 +57,7 @@ class MythApplication : Application() {
 
         // 4. Initialize Voice Call Manager
         callManager = com.myth.app.domain.CallManager(
+            context = this,
             wsClient = wsClient,
             scope = applicationScope
         )

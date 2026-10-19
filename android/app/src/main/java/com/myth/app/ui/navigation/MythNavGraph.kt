@@ -32,9 +32,12 @@ fun MythNavGraph(
                 }
             }
             is CallState.Active -> {
-                navController.navigate(Screen.ActiveCall.createRoute(state.contactUsername)) {
-                    launchSingleTop = true
-                    popUpTo(Screen.IncomingCall.route) { inclusive = true }
+                val currentRoute = navController.currentDestination?.route
+                if (currentRoute != Screen.ActiveCall.route) {
+                    navController.navigate(Screen.ActiveCall.createRoute(state.contactUsername)) {
+                        launchSingleTop = true
+                        popUpTo(Screen.IncomingCall.route) { inclusive = true }
+                    }
                 }
             }
             else -> {}

@@ -27,6 +27,11 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, "Screenshot detected. Security notice sent to conversation.", Toast.LENGTH_SHORT).show()
         }
 
+        // 3. Request RECORD_AUDIO runtime permission for encrypted voice calls
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 101)
+        }
+
         setContent {
             MythTheme {
                 val navController = rememberNavController()

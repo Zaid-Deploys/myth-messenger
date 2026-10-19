@@ -127,9 +127,24 @@ fun ActiveCallScreen(
         }
     }
 
-    val durationSeconds = when (val s = callState) {
-        is CallState.Active -> s.durationSeconds
-        else -> 0L
+    val durationSeconds by callManager.callDurationSeconds.collectAsState()
+
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            callManager.restartAudioCapture()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.RECORD_AUDIO
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     val minutes = durationSeconds / 60
