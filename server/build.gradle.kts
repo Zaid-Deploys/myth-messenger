@@ -21,6 +21,7 @@ dependencies {
     implementation(libs.ktor.serialization.kotlinx.json)
 
     implementation(libs.sqlite.jdbc)
+    implementation("org.postgresql:postgresql:42.7.2")
     implementation(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.ktor.server.test.host)

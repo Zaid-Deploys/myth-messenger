@@ -12,22 +12,40 @@ data class UserRecord(
     val createdAt: Long
 )
 
-class DatabaseFactory(private val dbUrl: String) {
+class DatabaseFactory(private val rawDbUrl: String) {
+
+    val isPostgres: Boolean
+    private val parsedDbUrl: String
+    private val parsedProps: java.util.Properties?
 
     init {
-        Class.forName("org.sqlite.JDBC")
+        val (url, props, postgres) = parseDatabaseUrl(rawDbUrl)
+        parsedDbUrl = url
+        parsedProps = props
+        isPostgres = postgres
+
+        if (isPostgres) {
+            Class.forName("org.postgresql.Driver")
+        } else {
+            Class.forName("org.sqlite.JDBC")
+        }
         initSchema()
     }
 
     private fun getConnection(): Connection {
-        return DriverManager.getConnection(dbUrl)
+        return if (parsedProps != null) {
+            DriverManager.getConnection(parsedDbUrl, parsedProps)
+        } else {
+            DriverManager.getConnection(parsedDbUrl)
+        }
     }
 
     private fun initSchema() {
         getConnection().use { conn ->
             conn.createStatement().use { stmt ->
-                // Enable foreign keys
-                stmt.execute("PRAGMA foreign_keys = ON;")
+                if (!isPostgres) {
+                    stmt.execute("PRAGMA foreign_keys = ON;")
+                }
 
                 // 1. Users metadata
                 stmt.execute("""
@@ -35,7 +53,7 @@ class DatabaseFactory(private val dbUrl: String) {
                         id TEXT PRIMARY KEY,
                         username TEXT UNIQUE NOT NULL,
                         password_hash TEXT NOT NULL,
-                        created_at INTEGER NOT NULL
+                        created_at BIGINT NOT NULL
                     );
                 """.trimIndent())
 
@@ -47,7 +65,7 @@ class DatabaseFactory(private val dbUrl: String) {
                         signed_prekey_id INTEGER NOT NULL,
                         signed_prekey TEXT NOT NULL,
                         signed_prekey_sig TEXT NOT NULL,
-                        created_at INTEGER NOT NULL,
+                        created_at BIGINT NOT NULL,
                         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                     );
                 """.trimIndent())
@@ -70,8 +88,8 @@ class DatabaseFactory(private val dbUrl: String) {
                         requester_id TEXT NOT NULL,
                         addressee_id TEXT NOT NULL,
                         status TEXT NOT NULL,
-                        created_at INTEGER NOT NULL,
-                        updated_at INTEGER NOT NULL,
+                        created_at BIGINT NOT NULL,
+                        updated_at BIGINT NOT NULL,
                         UNIQUE(requester_id, addressee_id),
                         FOREIGN KEY(requester_id) REFERENCES users(id) ON DELETE CASCADE,
                         FOREIGN KEY(addressee_id) REFERENCES users(id) ON DELETE CASCADE
@@ -83,7 +101,7 @@ class DatabaseFactory(private val dbUrl: String) {
                     CREATE TABLE IF NOT EXISTS blocked_users (
                         blocker_id TEXT NOT NULL,
                         blocked_id TEXT NOT NULL,
-                        created_at INTEGER NOT NULL,
+                        created_at BIGINT NOT NULL,
                         PRIMARY KEY(blocker_id, blocked_id),
                         FOREIGN KEY(blocker_id) REFERENCES users(id) ON DELETE CASCADE,
                         FOREIGN KEY(blocked_id) REFERENCES users(id) ON DELETE CASCADE
@@ -91,11 +109,39 @@ class DatabaseFactory(private val dbUrl: String) {
                 """.trimIndent())
 
                 // Explicit verification assertion: Ensure zero message tables exist
-                val rs = stmt.executeQuery("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%message%';")
+                val checkSql = if (isPostgres) {
+                    "SELECT table_name as name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE '%message%';"
+                } else {
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%message%';"
+                }
+                val rs = stmt.executeQuery(checkSql)
                 if (rs.next()) {
                     throw IllegalStateException("CRITICAL INVARIANT VIOLATION: Message table detected in persistent database")
                 }
             }
+        }
+    }
+
+    companion object {
+        fun parseDatabaseUrl(rawUrl: String): Triple<String, java.util.Properties?, Boolean> {
+            if (rawUrl.startsWith("postgres://") || rawUrl.startsWith("postgresql://")) {
+                val uri = java.net.URI(rawUrl)
+                val userInfo = uri.userInfo?.split(":")
+                val user = userInfo?.getOrNull(0)
+                val pass = userInfo?.getOrNull(1)
+                val host = uri.host
+                val port = if (uri.port != -1) uri.port else 5432
+                val dbName = uri.path.trimStart('/')
+                val props = java.util.Properties()
+                user?.let { props.setProperty("user", it) }
+                pass?.let { props.setProperty("password", it) }
+                props.setProperty("sslmode", "require")
+                val jdbcUrl = "jdbc:postgresql://$host:$port/$dbName"
+                return Triple(jdbcUrl, props, true)
+            } else if (rawUrl.startsWith("jdbc:postgresql:")) {
+                return Triple(rawUrl, null, true)
+            }
+            return Triple(rawUrl, null, false)
         }
     }
 
@@ -189,7 +235,7 @@ class DatabaseFactory(private val dbUrl: String) {
                 ps.executeUpdate()
 
                 // Insert one time prekeys
-                val opkPs = conn.prepareStatement("INSERT OR REPLACE INTO one_time_prekeys(user_id, key_id, public_key) VALUES(?, ?, ?);")
+                val opkPs = conn.prepareStatement("INSERT INTO one_time_prekeys(user_id, key_id, public_key) VALUES(?, ?, ?) ON CONFLICT(user_id, key_id) DO UPDATE SET public_key = EXCLUDED.public_key;")
                 for (opk in request.oneTimePreKeys) {
                     opkPs.setString(1, userId)
                     opkPs.setInt(2, opk.keyId)
@@ -330,7 +376,7 @@ class DatabaseFactory(private val dbUrl: String) {
         val target = getUserByUsername(targetUsername) ?: return false
         val now = System.currentTimeMillis()
         getConnection().use { conn ->
-            val ps = conn.prepareStatement("INSERT OR REPLACE INTO blocked_users(blocker_id, blocked_id, created_at) VALUES(?, ?, ?);")
+            val ps = conn.prepareStatement("INSERT INTO blocked_users(blocker_id, blocked_id, created_at) VALUES(?, ?, ?) ON CONFLICT(blocker_id, blocked_id) DO UPDATE SET created_at = EXCLUDED.created_at;")
             ps.setString(1, blockerId)
             ps.setString(2, target.id)
             ps.setLong(3, now)

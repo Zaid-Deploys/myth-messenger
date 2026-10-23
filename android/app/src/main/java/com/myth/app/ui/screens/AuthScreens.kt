@@ -272,7 +272,7 @@ fun LoginScreen(
                             chatManager.onUserAuthenticated(auth)
                             onNavigateToMain()
                         }.onFailure { err ->
-                            errorMessage = err.localizedMessage ?: err.message ?: "Login failed"
+                            errorMessage = err.message.takeIf { !it.isNullOrBlank() } ?: "Unable to connect. The server may be waking up, please tap Log In again."
                         }
                     }
                 },
