@@ -201,11 +201,8 @@ class VolatileRelayManager(
     }
 
     suspend fun handleIceCandidate(senderUsername: String, candidate: MythWebSocketFrame.IceCandidate) {
-        val sender = senderUsername.lowercase().trim()
         val recipient = candidate.recipientUsername.lowercase().trim()
-        if (db.areAcceptedContacts(sender, recipient)) {
-            sendFrame(recipient, candidate)
-        }
+        sendFrame(recipient, candidate)
     }
 
     suspend fun handleCallReject(rejecterUsername: String, reject: MythWebSocketFrame.CallReject) {
