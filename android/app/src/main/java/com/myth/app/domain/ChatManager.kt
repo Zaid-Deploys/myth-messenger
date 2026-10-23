@@ -87,10 +87,36 @@ class ChatManager(
 
     fun onUserAuthenticated(auth: AuthResponse) {
         currentUser = auth
-        context?.let { loadOrInitKeys(it, auth.username) }
+        context?.let { ctx ->
+            loadOrInitKeys(ctx, auth.username)
+            val prefs = ctx.getSharedPreferences("myth_auth_session", android.content.Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("user_id", auth.userId)
+                .putString("username", auth.username)
+                .putString("token", auth.token)
+                .putLong("created_at", auth.createdAt)
+                .apply()
+        }
         callManager?.currentUser = auth.username
         wsClient.connect(auth.token)
         publishPreKeys(auth.token)
+    }
+
+    fun restorePersistedSession(): Boolean {
+        val ctx = context ?: return false
+        val prefs = ctx.getSharedPreferences("myth_auth_session", android.content.Context.MODE_PRIVATE)
+        val token = prefs.getString("token", null) ?: return false
+        val username = prefs.getString("username", null) ?: return false
+        val userId = prefs.getString("user_id", null) ?: return false
+        val createdAt = prefs.getLong("created_at", System.currentTimeMillis())
+
+        val auth = AuthResponse(token = token, userId = userId, username = username, createdAt = createdAt)
+        currentUser = auth
+        loadOrInitKeys(ctx, username)
+        callManager?.currentUser = username
+        wsClient.connect(token)
+        publishPreKeys(token)
+        return true
     }
 
     private fun publishPreKeys(token: String) {
@@ -307,6 +333,8 @@ class ChatManager(
     }
 
     fun logout() {
+        context?.getSharedPreferences("myth_auth_session", android.content.Context.MODE_PRIVATE)
+            ?.edit()?.clear()?.apply()
         currentUser = null
         callManager?.currentUser = null
         wsClient.disconnect()

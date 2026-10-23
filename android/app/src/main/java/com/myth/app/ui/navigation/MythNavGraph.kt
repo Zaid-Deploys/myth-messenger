@@ -182,6 +182,12 @@ fun MythNavGraph(
             IncomingCallScreen(
                 callerUsername = username,
                 callManager = callManager,
+                onCallAccepted = { contactUser ->
+                    navController.navigate(Screen.ActiveCall.createRoute(contactUser)) {
+                        launchSingleTop = true
+                        popUpTo(Screen.IncomingCall.route) { inclusive = true }
+                    }
+                },
                 onCallDismissed = { navController.popBackStack() }
             )
         }
