@@ -113,3 +113,4 @@ The output APK is generated at:
 ```bash
 docker-compose up --build
 ```
+VT3DBE
